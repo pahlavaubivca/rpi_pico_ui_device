@@ -33,7 +33,7 @@ use hal::pac;
 use embedded_graphics::image::{Image, ImageRaw, ImageRawLE};
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_graphics::prelude::*;
-use embedded_hal::digital::v2::OutputPin;
+// use embedded_hal::digital::v2::OutputPin;
 use rp2040_hal::clocks::Clock;
 use embedded_graphics_core::draw_target::DrawTarget;
 //use embedded_hal::digital::v2::OutputPin;
@@ -43,6 +43,7 @@ use embedded_time::fixed_point::FixedPoint;
 //use st7735_lcd;
 use st7735_lcd::Orientation;
 use rp2040_hal::fugit::RateExtU32;
+use lcd::lcd::{Orientation, ST7735};
 // use lcd;
 
 /// The linker will place this boot block at the start of our program image. We
@@ -86,7 +87,7 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+   
 
     // The single-cycle I/O block controls our GPIO pins
     let sio = hal::Sio::new(pac.SIO);
@@ -102,9 +103,9 @@ fn main() -> ! {
     // Configure GPIO25 as an output
     let mut led_pin = pins.gpio25.into_push_pull_output();
     // These are implicitly used by the spi driver if they are in the correct mode
-    let _spi_sclk = pins.gpio6.into_mode::<hal::gpio::FunctionSpi>();
-    let _spi_mosi = pins.gpio7.into_mode::<hal::gpio::FunctionSpi>();
-    let _spi_miso = pins.gpio4.into_mode::<hal::gpio::FunctionSpi>();
+    let _spi_sclk = pins.gpio6.into_function::<hal::gpio::FunctionSpi>();
+    let _spi_mosi = pins.gpio7.into_function::<hal::gpio::FunctionSpi>();
+    let _spi_miso = pins.gpio4.into_function::<hal::gpio::FunctionSpi>();
 
     let sclk = pins.gpio2.into_function::<FunctionSpi>();
     let mosi = pins.gpio3.into_function::<FunctionSpi>();
@@ -113,10 +114,12 @@ fn main() -> ! {
     let spi_pin_layout = (mosi, sclk);
 
     let spi = hal::Spi::<_, _, _, 8>::new(pac.SPI0,spi_pin_layout);
+    
+    
 
     let mut lcd_led = pins.gpio12.into_push_pull_output();
     // let dc = pins.gpio13.into_push_pull_output();
-    let dc = pins.gpio13.into_readable_output();
+    let dc = pins.gpio13.into_push_pull_output();
     let rst = pins.gpio14.into_push_pull_output();
 
     // Exchange the uninitialised SPI driver for an initialised one
@@ -126,9 +129,11 @@ fn main() -> ! {
         16_000_000u32.Hz(),
         &embedded_hal::spi::MODE_0,
     );
+    
  
-    let mut disp = st7735_lcd::ST7735::new(spi, dc, rst, true, false, 160, 128);
-
+    let mut disp = ST7735::new(spi, dc, Some(rst), true, false, 160, 128);
+    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+    let mut delay = cortex_m::delay::Delay::de
     disp.init(&mut delay).unwrap();
     disp.set_orientation(&Orientation::Landscape).unwrap();
     disp.clear(Rgb565::BLACK).unwrap();
