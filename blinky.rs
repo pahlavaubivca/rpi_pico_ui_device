@@ -94,9 +94,9 @@ fn main() -> ! {
     let mut led_pin = pins.gpio25.into_push_pull_output();
 
     // These are implicitly used by the spi driver if they are in the correct mode
-    let _spi_sclk = pins.gpio6.into_function::<hal::gpio::FunctionSpi>();
-    let _spi_mosi = pins.gpio7.into_function::<hal::gpio::FunctionSpi>();
-    let _spi_miso = pins.gpio4.into_function::<hal::gpio::FunctionSpi>();
+    let _spi_sclk = pins.gpio6.into_mode::<hal::gpio::FunctionSpi>();
+    let _spi_mosi = pins.gpio7.into_mode::<hal::gpio::FunctionSpi>();
+    let _spi_miso = pins.gpio4.into_mode::<hal::gpio::FunctionSpi>();
 
     let spi_pin_layout = (_spi_mosi, _spi_sclk);
 
@@ -119,23 +119,26 @@ fn main() -> ! {
         spi, 
         dc,
         Some(rst),
-        true, false, 160, 128);
+        true, false, 128, 128);
 
-    
+
     // cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
     // let mut delay_ns = cortex_m::delay::Delay::<hal::clocks::>::new();
-    
+
     disp.init(&mut delay).unwrap();
     disp.set_orientation(&Orientation::Landscape).unwrap();
+    disp.set_offset(1, 2);
     disp.clear(Rgb565::BLACK).unwrap();
-    disp.set_offset(0, 25);
-    
+
+
     let image_raw: ImageRawLE<Rgb565> =
         ImageRaw::new(include_bytes!("./assets/ferris.raw"), 86);
-    
+
     let image: Image<_> = Image::new(&image_raw, Point::new(34, 8));
-    
+
     image.draw(&mut disp).unwrap();
+
+    lcd_led.set_high().unwrap();
 
     loop {
         // continue;
