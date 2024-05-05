@@ -1,27 +1,20 @@
-//! # GPIO 'Blinky' Example
-//!
-//! This application demonstrates how to control a GPIO pin on the RP2040.
-//!
-//! It may need to be adapted to your particular board layout and/or pin assignment.
-//!
-//! See the `Cargo.toml` file for Copyright and license details.
-
 #![no_std]
 #![no_main]
 
 pub mod lcd;
-// extern crate embedded_graphics;
+
 extern crate embedded_hal;
 extern crate panic_halt;
 extern crate rp2040_hal;
 extern crate embedded_graphics;
 extern crate embedded_graphics_core;
 extern crate cortex_m;
+extern crate defmt;
+extern crate defmt_rtt;
+// extern crate panic_probe;
 
-// Ensure we halt the program on panic (if we don't mention this crate it won't
-// be linked)
-
-use cortex_m::delay::Delay;
+use defmt::*;
+use defmt_rtt as _;
 use embedded_graphics::image::{Image, ImageRaw, ImageRawLE};
 use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_graphics_core::Drawable;
@@ -29,17 +22,17 @@ use embedded_graphics_core::geometry::Point;
 use embedded_graphics_core::pixelcolor::Rgb565;
 use embedded_graphics_core::prelude::RgbColor;
 use embedded_hal::digital::OutputPin;
-// use embedded_hal::digital::v2::OutputPin;
 // Alias for our HAL crate
 use rp2040_hal as hal;
 
-// A shorter alias for the Peripheral Access Crate, which provides low-level
-// register access
 use hal::pac;
-
+// use rp2040_boot2;
 use rp2040_hal::clocks::Clock;
 use rp2040_hal::fugit::RateExtU32;
 use lcd::lcd::{Orientation, ST7735};
+
+// use panic_probe as _;
+// use defmt::info;
 
 #[link_section = ".boot2"]
 #[used]
@@ -57,7 +50,11 @@ const XTAL_FREQ_HZ: u32 = 12_000_000u32;
 /// The function configures the RP2040 peripherals, then toggles a GPIO pin in
 /// an infinite loop. If there is an LED connected to that pin, it will blink.
 #[rp2040_hal::entry]
+// #[hal::entry]
 fn main() -> ! {
+    
+    defmt::info!("Hello, world!");
+    // info!("Hello, world!");
     // Grab our singleton objects
     let mut pac = pac::Peripherals::take().unwrap();
     let core = pac::CorePeripherals::take().unwrap();
@@ -94,9 +91,9 @@ fn main() -> ! {
     let mut led_pin = pins.gpio25.into_push_pull_output();
 
     // These are implicitly used by the spi driver if they are in the correct mode
-    let _spi_sclk = pins.gpio6.into_mode::<hal::gpio::FunctionSpi>();
-    let _spi_mosi = pins.gpio7.into_mode::<hal::gpio::FunctionSpi>();
-    let _spi_miso = pins.gpio4.into_mode::<hal::gpio::FunctionSpi>();
+    let _spi_sclk = pins.gpio6.into_function::<hal::gpio::FunctionSpi>();
+    let _spi_mosi = pins.gpio7.into_function::<hal::gpio::FunctionSpi>();
+    let _spi_miso = pins.gpio4.into_function::<hal::gpio::FunctionSpi>();
 
     let spi_pin_layout = (_spi_mosi, _spi_sclk);
 
@@ -116,7 +113,7 @@ fn main() -> ! {
 
 
     let mut disp = ST7735::new(
-        spi, 
+        spi,
         dc,
         Some(rst),
         true, false, 128, 128);
@@ -141,6 +138,7 @@ fn main() -> ! {
     lcd_led.set_high().unwrap();
 
     loop {
+        defmt::info!("echo...");
         // continue;
         led_pin.set_high().unwrap();
         delay.delay_ms(500);
