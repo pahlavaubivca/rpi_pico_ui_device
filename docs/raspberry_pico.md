@@ -1,10 +1,11 @@
 ## Pico pins
-![img_1.png](img_1.png)
+![img_2.png](img_2.png)
 
 
 ## LCD Display connection 
 
 <img src="img.png" width="300"/>
+![img_2.png](img_2.png)
 
 <img src="IMG_20240426_144935.jpg" width="350"/>
 
@@ -75,3 +76,16 @@ You can apply the rule changes with the following command:
 [more about](https://slushee.dev/pico-tutorial/getting-started/)
 
 <img src="2024-05-05_16-25.png" width="600"/>
+
+
+
+![img_3.png](img_3.png)
+
+Orange
+TX/SC (Output from Probe)
+
+Black
+GND
+
+Yellow
+RX/SD (Input to Probe or I/O)

@@ -119,9 +119,6 @@ fn main() -> ! {
         true, false, 128, 128);
 
 
-    // cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
-    // let mut delay_ns = cortex_m::delay::Delay::<hal::clocks::>::new();
-
     disp.init(&mut delay).unwrap();
     disp.set_orientation(&Orientation::Landscape).unwrap();
     disp.set_offset(1, 2);
@@ -141,9 +138,9 @@ fn main() -> ! {
         defmt::info!("echo...");
         // continue;
         led_pin.set_high().unwrap();
-        delay.delay_ms(500);
+        delay.delay_ms(1000);
         led_pin.set_low().unwrap();
-        delay.delay_ms(500);
+        delay.delay_ms(1000);
     }
 }
 
