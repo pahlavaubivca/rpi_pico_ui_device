@@ -88,4 +88,4 @@ Black
 GND
 
 Yellow
-RX/SD (Input to Probe or I/O)
+RX/SD (Input to Probe or I/O) 

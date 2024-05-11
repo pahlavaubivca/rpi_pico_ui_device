@@ -2,6 +2,7 @@
 #![no_main]
 
 pub mod lcd;
+mod utils;
 
 extern crate embedded_hal;
 extern crate panic_halt;
@@ -16,11 +17,17 @@ extern crate defmt_rtt;
 use defmt::*;
 use defmt_rtt as _;
 use embedded_graphics::image::{Image, ImageRaw, ImageRawLE};
+use embedded_graphics::mono_font::ascii::FONT_6X12;
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::prelude::Primitive;
+use embedded_graphics::primitives::{Line, PrimitiveStyle};
+use embedded_graphics::text::Text;
 use embedded_graphics_core::draw_target::DrawTarget;
 use embedded_graphics_core::Drawable;
-use embedded_graphics_core::geometry::Point;
-use embedded_graphics_core::pixelcolor::Rgb565;
+use embedded_graphics_core::geometry::{Point, Size};
+use embedded_graphics_core::pixelcolor::{Rgb565, WebColors};
 use embedded_graphics_core::prelude::RgbColor;
+use embedded_graphics_core::primitives::Rectangle;
 use embedded_hal::digital::OutputPin;
 // Alias for our HAL crate
 use rp2040_hal as hal;
@@ -29,7 +36,9 @@ use hal::pac;
 // use rp2040_boot2;
 use rp2040_hal::clocks::Clock;
 use rp2040_hal::fugit::RateExtU32;
+use rp2040_hal::uart::{DataBits, ReadErrorType, StopBits, UartConfig};
 use lcd::lcd::{Orientation, ST7735};
+use utils::itoa::itoa;
 
 // use panic_probe as _;
 // use defmt::info;
@@ -52,12 +61,12 @@ const XTAL_FREQ_HZ: u32 = 12_000_000u32;
 #[rp2040_hal::entry]
 // #[hal::entry]
 fn main() -> ! {
-    
     defmt::info!("Hello, world!");
     // info!("Hello, world!");
     // Grab our singleton objects
     let mut pac = pac::Peripherals::take().unwrap();
     let core = pac::CorePeripherals::take().unwrap();
+
 
     // Set up the watchdog driver - needed by the clock setup code
     let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
@@ -93,7 +102,7 @@ fn main() -> ! {
     // These are implicitly used by the spi driver if they are in the correct mode
     let _spi_sclk = pins.gpio6.into_function::<hal::gpio::FunctionSpi>();
     let _spi_mosi = pins.gpio7.into_function::<hal::gpio::FunctionSpi>();
-    let _spi_miso = pins.gpio4.into_function::<hal::gpio::FunctionSpi>();
+    // let _spi_miso = pins.gpio4.into_function::<hal::gpio::FunctionSpi>();
 
     let spi_pin_layout = (_spi_mosi, _spi_sclk);
 
@@ -122,25 +131,111 @@ fn main() -> ! {
     disp.init(&mut delay).unwrap();
     disp.set_orientation(&Orientation::Landscape).unwrap();
     disp.set_offset(1, 2);
+    disp.set_address_window(0, 0, 127, 127).unwrap();
     disp.clear(Rgb565::BLACK).unwrap();
 
 
-    let image_raw: ImageRawLE<Rgb565> =
-        ImageRaw::new(include_bytes!("./assets/ferris.raw"), 86);
-
-    let image: Image<_> = Image::new(&image_raw, Point::new(34, 8));
-
-    image.draw(&mut disp).unwrap();
+    // let image_raw: ImageRawLE<Rgb565> =
+    //     ImageRaw::new(include_bytes!("./assets/ferris.raw"), 86);
+    //
+    // let image: Image<_> = Image::new(&image_raw, Point::new(34, 8));
+    //
+    // image.draw(&mut disp).unwrap();
 
     lcd_led.set_high().unwrap();
+    led_pin.set_high().unwrap();
+
+    let mut counter = 0;
+    let mut first_draw = true;
+
+
+    let uart_pins = (
+        // UART TX (characters sent from RP2040) on pin 1 (GPIO0)
+        pins.gpio4.into_function(),
+        // UART RX (characters received by RP2040) on pin 2 (GPIO1)
+        pins.gpio5.into_function(),
+    );
+    let mut uart = hal::uart::UartPeripheral::new(pac.UART1, uart_pins, &mut pac.RESETS)
+        .enable(
+            UartConfig::new(9600.Hz(), DataBits::Eight, None, StopBits::One),
+            clocks.peripheral_clock.freq(),
+        )
+        .unwrap();
+
+
+    let serial_available = || uart.uart_is_readable();
+    let serial_read = |buf| uart.read_full_blocking(buf).unwrap();
+
 
     loop {
-        defmt::info!("echo...");
-        // continue;
-        led_pin.set_high().unwrap();
-        delay.delay_ms(1000);
-        led_pin.set_low().unwrap();
-        delay.delay_ms(1000);
+        let mut uart_buffer = [0u8; 1];
+        let uart_read_result = uart.read_full_blocking(&mut uart_buffer);
+        match uart_read_result {
+            Ok(res) => {
+                info!("Read: {:?}", uart_buffer);
+            }
+            Err(err) => {
+                info!("Error: uart read");
+            }
+        }
+
+        // ----- START draw on the screen ------
+        // todo move to separate function
+        // disp.clear(Rgb565::BLACK).unwrap();
+        let mut lines_to_display: [Option<&str>; 10] = [None; 10];
+
+        counter += 1;
+
+        let counter_buffer = itoa(counter);
+        let counter_str = core::str::from_utf8(&counter_buffer).unwrap();
+        lines_to_display[1] = Some(&counter_str);
+        lines_to_display[0] = Some("Hello, world!");
+        let mut index = 0;
+
+
+        for line in lines_to_display {
+            let offset_y = (12 * (index + 1)) + 1;
+
+            // I did not find a way to make something like - `to_str(num:i32) -> str`
+            let num_line_buffer = itoa(index + 1);
+            let num_line_str = core::str::from_utf8(&num_line_buffer).unwrap();
+
+            // draw line and line number when first draw
+            if first_draw {
+                _ = Text::new(
+                    num_line_str,
+                    Point::new(0, offset_y),
+                    MonoTextStyle::new(&FONT_6X12, Rgb565::WHITE),
+                ).draw(&mut disp).unwrap();
+
+                _ = Line::new(
+                    Point::new(2, offset_y + 2),
+                    Point::new(125, offset_y + 2),
+                )
+                    .into_styled(PrimitiveStyle::with_stroke(Rgb565::BLUE, 1))
+                    .draw(&mut disp).unwrap();
+            }
+
+            if let Some(line) = line {
+                // Clean up area for text
+                _ = Rectangle::new(
+                    Point::new(15, offset_y - 8),
+                    Size::new(110, 10),
+                ).into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_DARK_RED)).draw(&mut disp).unwrap();
+
+                // write text
+                _ = Text::new(
+                    line,
+                    Point::new(15, offset_y),
+                    MonoTextStyle::new(&FONT_6X12, Rgb565::RED),
+                ).draw(&mut disp).unwrap();
+            }
+            index += 1;
+        }
+
+        first_draw = false;
+
+        // ----- END draw on the screen ------
     }
 }
 
