@@ -156,12 +156,13 @@ fn main() -> ! {
 
     let uart_pins = (
         // UART TX (characters sent from RP2040) on pin 1 (GPIO0)
-        pins.gpio4.into_function(),
-        // pins.gpio16.into_function(),
+        // pins.gpio4.into_function(),
+        pins.gpio16.into_function(),
         // UART RX (characters received by RP2040) on pin 2 (GPIO1)
-        pins.gpio5.into_function(),
+        // pins.gpio5.into_function(),
+        pins.gpio17.into_function(),
     );
-    let mut uart = hal::uart::UartPeripheral::new(pac.UART1, uart_pins, &mut pac.RESETS)
+    let mut uart = hal::uart::UartPeripheral::new(pac.UART0, uart_pins, &mut pac.RESETS)
         .enable(
             UartConfig::new(19_200.Hz(), DataBits::Eight, None, StopBits::One),
             clocks.peripheral_clock.freq(),
@@ -179,8 +180,8 @@ fn main() -> ! {
         // if uart.uart_is_readable() {
         //     info!("UART is readable");
         //     let mut uart_buffer = [0u8; 1];
-        //     // let uart_read_result = uart.read_full_blocking(&mut uart_buffer);
-        //     let uart_read_result = uart.read();
+        //     let uart_read_result = uart.read_full_blocking(&mut uart_buffer);
+        //     // let uart_read_result = uart.read();
         //     match uart_read_result {
         //         Ok(_) => {
         //             let uart_buffer_str = core::str::from_utf8(&uart_buffer).unwrap();
@@ -189,22 +190,22 @@ fn main() -> ! {
         //         }
         //         Err(err) => {
         //             let mut message = "";
-        //             let err_map = err.map(|e| {
-        //                 message = match e
-        //                 {
-        //                     uart::ReadErrorType::Break => "UART Read: Break",
-        //                     uart::ReadErrorType::Overrun => "UART Read: Overrun",
-        //                     uart::ReadErrorType::Parity => "UART Read: Parity",
-        //                     uart::ReadErrorType::Framing => "UART Read: Framing"
-        //                 };
-        //             });
+        //             // let err_map = err.map(|e| {
+        //             //     message = match e
+        //             //     {
+        //             //         uart::ReadErrorType::Break => "UART Read: Break",
+        //             //         uart::ReadErrorType::Overrun => "UART Read: Overrun",
+        //             //         uart::ReadErrorType::Parity => "UART Read: Parity",
+        //             //         uart::ReadErrorType::Framing => "UART Read: Framing"
+        //             //     };
+        //             // });
         // 
-        //             // let message = match err   {
-        //             //     uart::ReadErrorType::Break => "UART Read: Break",
-        //             //     uart::ReadErrorType::Overrun => "UART Read: Overrun",
-        //             //     uart::ReadErrorType::Parity => "UART Read: Parity",
-        //             //     uart::ReadErrorType::Framing => "UART Read: Framing"
-        //             // };
+        //             let message = match err   {
+        //                 uart::ReadErrorType::Break => "UART Read: Break",
+        //                 uart::ReadErrorType::Overrun => "UART Read: Overrun",
+        //                 uart::ReadErrorType::Parity => "UART Read: Parity",
+        //                 uart::ReadErrorType::Framing => "UART Read: Framing"
+        //             };
         //             lines_to_display[7] = Some(message);
         //         }
         //     }
