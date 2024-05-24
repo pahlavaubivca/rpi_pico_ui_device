@@ -14,9 +14,13 @@ extern crate defmt;
 extern crate defmt_rtt;
 // extern crate panic_probe;
 
+use core::any::{Any, TypeId};
+use core::convert::TryInto;
+use core::fmt::Debug;
+use cortex_m::prelude::{_embedded_hal_serial_Read, _embedded_hal_serial_Write};
+// use core::fmt::Debug;
+// use cortex_m::prelude::_embedded_hal_serial_Read;
 use defmt::*;
-use defmt_rtt as _;
-use embedded_graphics::image::{Image, ImageRaw, ImageRawLE};
 use embedded_graphics::mono_font::ascii::FONT_6X12;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::prelude::Primitive;
@@ -36,7 +40,8 @@ use hal::pac;
 // use rp2040_boot2;
 use rp2040_hal::clocks::Clock;
 use rp2040_hal::fugit::RateExtU32;
-use rp2040_hal::uart::{DataBits, ReadErrorType, StopBits, UartConfig};
+use rp2040_hal::uart;
+use rp2040_hal::uart::{DataBits, Error, StopBits, UartConfig};
 use lcd::lcd::{Orientation, ST7735};
 use utils::itoa::itoa;
 
@@ -152,37 +157,65 @@ fn main() -> ! {
     let uart_pins = (
         // UART TX (characters sent from RP2040) on pin 1 (GPIO0)
         pins.gpio4.into_function(),
+        // pins.gpio16.into_function(),
         // UART RX (characters received by RP2040) on pin 2 (GPIO1)
         pins.gpio5.into_function(),
     );
     let mut uart = hal::uart::UartPeripheral::new(pac.UART1, uart_pins, &mut pac.RESETS)
         .enable(
-            UartConfig::new(9600.Hz(), DataBits::Eight, None, StopBits::One),
+            UartConfig::new(19_200.Hz(), DataBits::Eight, None, StopBits::One),
             clocks.peripheral_clock.freq(),
         )
         .unwrap();
-
-
-    let serial_available = || uart.uart_is_readable();
-    let serial_read = |buf| uart.read_full_blocking(buf).unwrap();
-
-
     loop {
-        let mut uart_buffer = [0u8; 1];
-        let uart_read_result = uart.read_full_blocking(&mut uart_buffer);
-        match uart_read_result {
-            Ok(res) => {
-                info!("Read: {:?}", uart_buffer);
-            }
-            Err(err) => {
-                info!("Error: uart read");
-            }
+        let mut lines_to_display: [Option<&str>; 10] = [None; 10];
+        if uart.uart_is_writable() {
+            info!("uart is writable. {}",counter);
+            // _ = uart.flush();
+            
+            uart.write_full_blocking(b"q\r\n");
+            // let uart_write_result = uart.write('q' as u8).unwrap();
         }
+        // if uart.uart_is_readable() {
+        //     info!("UART is readable");
+        //     let mut uart_buffer = [0u8; 1];
+        //     // let uart_read_result = uart.read_full_blocking(&mut uart_buffer);
+        //     let uart_read_result = uart.read();
+        //     match uart_read_result {
+        //         Ok(_) => {
+        //             let uart_buffer_str = core::str::from_utf8(&uart_buffer).unwrap();
+        //             info!("UART Read: {:?}", uart_buffer_str);
+        //             lines_to_display[6] = Some("uart read ok");
+        //         }
+        //         Err(err) => {
+        //             let mut message = "";
+        //             let err_map = err.map(|e| {
+        //                 message = match e
+        //                 {
+        //                     uart::ReadErrorType::Break => "UART Read: Break",
+        //                     uart::ReadErrorType::Overrun => "UART Read: Overrun",
+        //                     uart::ReadErrorType::Parity => "UART Read: Parity",
+        //                     uart::ReadErrorType::Framing => "UART Read: Framing"
+        //                 };
+        //             });
+        // 
+        //             // let message = match err   {
+        //             //     uart::ReadErrorType::Break => "UART Read: Break",
+        //             //     uart::ReadErrorType::Overrun => "UART Read: Overrun",
+        //             //     uart::ReadErrorType::Parity => "UART Read: Parity",
+        //             //     uart::ReadErrorType::Framing => "UART Read: Framing"
+        //             // };
+        //             lines_to_display[7] = Some(message);
+        //         }
+        //     }
+        // } else {
+        //     lines_to_display[8] = Some("UART serial not available");
+        // }
 
         // ----- START draw on the screen ------
         // todo move to separate function
         // disp.clear(Rgb565::BLACK).unwrap();
-        let mut lines_to_display: [Option<&str>; 10] = [None; 10];
+
 
         counter += 1;
 
@@ -216,12 +249,14 @@ fn main() -> ! {
                     .draw(&mut disp).unwrap();
             }
 
+            _ = Rectangle::new(
+                Point::new(15, offset_y - 8),
+                Size::new(113, 10),
+            ).into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK)).draw(&mut disp).unwrap();
+
             if let Some(line) = line {
                 // Clean up area for text
-                _ = Rectangle::new(
-                    Point::new(15, offset_y - 8),
-                    Size::new(110, 10),
-                ).into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_DARK_RED)).draw(&mut disp).unwrap();
+
 
                 // write text
                 _ = Text::new(
