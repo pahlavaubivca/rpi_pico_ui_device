@@ -168,50 +168,57 @@ fn main() -> ! {
             clocks.peripheral_clock.freq(),
         )
         .unwrap();
+
+    let mut uart_buffer = [0u8; 10];
     loop {
+        uart_buffer = [0u8; 10];
         let mut lines_to_display: [Option<&str>; 10] = [None; 10];
         if uart.uart_is_writable() {
-            info!("uart is writable. {}",counter);
+            // info!("uart is writable. {}",counter);
             _ = uart.flush();
             
-            uart.write_full_blocking(b" hello world");
+            uart.write_full_blocking(b" hello world. msg from pico");
             // let uart_write_result = uart.write('q' as u8).unwrap();
+
         }
-        // if uart.uart_is_readable() {
-        //     info!("UART is readable");
-        //     let mut uart_buffer = [0u8; 1];
-        //     let uart_read_result = uart.read_full_blocking(&mut uart_buffer);
-        //     // let uart_read_result = uart.read();
-        //     match uart_read_result {
-        //         Ok(_) => {
-        //             let uart_buffer_str = core::str::from_utf8(&uart_buffer).unwrap();
-        //             info!("UART Read: {:?}", uart_buffer_str);
-        //             lines_to_display[6] = Some("uart read ok");
-        //         }
-        //         Err(err) => {
-        //             let mut message = "";
-        //             // let err_map = err.map(|e| {
-        //             //     message = match e
-        //             //     {
-        //             //         uart::ReadErrorType::Break => "UART Read: Break",
-        //             //         uart::ReadErrorType::Overrun => "UART Read: Overrun",
-        //             //         uart::ReadErrorType::Parity => "UART Read: Parity",
-        //             //         uart::ReadErrorType::Framing => "UART Read: Framing"
-        //             //     };
-        //             // });
-        // 
-        //             let message = match err   {
-        //                 uart::ReadErrorType::Break => "UART Read: Break",
-        //                 uart::ReadErrorType::Overrun => "UART Read: Overrun",
-        //                 uart::ReadErrorType::Parity => "UART Read: Parity",
-        //                 uart::ReadErrorType::Framing => "UART Read: Framing"
-        //             };
-        //             lines_to_display[7] = Some(message);
-        //         }
-        //     }
-        // } else {
-        //     lines_to_display[8] = Some("UART serial not available");
-        // }
+        if uart.uart_is_readable() {
+            // info!("UART is readable");
+            
+            // _ = uart.flush();
+            let uart_read_result = uart.read_full_blocking(&mut uart_buffer);
+
+            // let uart_read_result = uart.read();
+            match uart_read_result {
+                Ok(_) => {
+                    let uart_buffer_str = core::str::from_utf8(&uart_buffer).unwrap();
+                    info!("UART Read: {:?}", uart_buffer_str);
+                    lines_to_display[6] = Some(uart_buffer_str);
+                }
+                Err(err) => {
+                    let mut message = "";
+                    // let err_map = err.map(|e| {
+                    //     message = match e
+                    //     {
+                    //         uart::ReadErrorType::Break => "UART Read: Break",
+                    //         uart::ReadErrorType::Overrun => "UART Read: Overrun",
+                    //         uart::ReadErrorType::Parity => "UART Read: Parity",
+                    //         uart::ReadErrorType::Framing => "UART Read: Framing"
+                    //     };
+                    // });
+
+                    let message = match err   {
+                        uart::ReadErrorType::Break => "UART Read: Break",
+                        uart::ReadErrorType::Overrun => "UART Read: Overrun",
+                        uart::ReadErrorType::Parity => "UART Read: Parity",
+                        uart::ReadErrorType::Framing => "UART Read: Framing"
+                    };
+                    lines_to_display[7] = Some(message);
+                }
+            }
+            _ = uart.flush();
+        } else {
+            lines_to_display[8] = Some("UART serial not available");
+        }
 
         // ----- START draw on the screen ------
         // todo move to separate function
