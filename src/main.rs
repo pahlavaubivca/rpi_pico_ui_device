@@ -172,9 +172,9 @@ fn main() -> ! {
         let mut lines_to_display: [Option<&str>; 10] = [None; 10];
         if uart.uart_is_writable() {
             info!("uart is writable. {}",counter);
-            // _ = uart.flush();
+            _ = uart.flush();
             
-            uart.write_full_blocking(b"q\r\n");
+            uart.write_full_blocking(b" hello world");
             // let uart_write_result = uart.write('q' as u8).unwrap();
         }
         // if uart.uart_is_readable() {
