@@ -3,6 +3,7 @@
 
 pub mod lcd;
 mod utils;
+mod jobs;
 
 extern crate embedded_hal;
 extern crate panic_halt;
@@ -12,11 +13,13 @@ extern crate embedded_graphics_core;
 extern crate cortex_m;
 extern crate defmt;
 extern crate defmt_rtt;
+extern crate heapless;
 // extern crate panic_probe;
 
 use core::any::{Any, TypeId};
 use core::convert::TryInto;
 use core::fmt::Debug;
+use cortex_m::asm::delay;
 use cortex_m::prelude::{_embedded_hal_serial_Read, _embedded_hal_serial_Write};
 // use core::fmt::Debug;
 // use cortex_m::prelude::_embedded_hal_serial_Read;
@@ -40,8 +43,10 @@ use hal::pac;
 // use rp2040_boot2;
 use rp2040_hal::clocks::Clock;
 use rp2040_hal::fugit::RateExtU32;
+use rp2040_hal::multicore::{Multicore, Stack};
 use rp2040_hal::uart;
 use rp2040_hal::uart::{DataBits, Error, StopBits, UartConfig};
+use jobs::core0;
 use lcd::lcd::{Orientation, ST7735};
 use utils::itoa::itoa;
 
@@ -55,6 +60,7 @@ pub static BOOT2: [u8; 256] = rp2040_boot2::BOOT_LOADER_GENERIC_03H;
 /// External high-speed crystal on the Raspberry Pi Pico board is 12 MHz. Adjust
 /// if your board has a different frequency
 const XTAL_FREQ_HZ: u32 = 12_000_000u32;
+static mut CORE1_STACK: Stack<2048> = Stack::new();
 
 /// Entry point to our bare-metal application.
 ///
@@ -91,7 +97,7 @@ fn main() -> ! {
 
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
     // The single-cycle I/O block controls our GPIO pins
-    let sio = hal::Sio::new(pac.SIO);
+    let mut sio = hal::Sio::new(pac.SIO);
 
     // Set the pins to their default state
     let pins = hal::gpio::Pins::new(
@@ -132,34 +138,39 @@ fn main() -> ! {
         Some(rst),
         true, false, 128, 128);
 
-
     disp.init(&mut delay).unwrap();
-    disp.set_orientation(&Orientation::Landscape).unwrap();
+    disp.set_orientation(&Orientation::LandscapeSwapped).unwrap();
+
     disp.set_offset(1, 2);
     disp.set_address_window(0, 0, 127, 127).unwrap();
     disp.clear(Rgb565::BLACK).unwrap();
 
-
-    // let image_raw: ImageRawLE<Rgb565> =
-    //     ImageRaw::new(include_bytes!("./assets/ferris.raw"), 86);
-    //
-    // let image: Image<_> = Image::new(&image_raw, Point::new(34, 8));
-    //
-    // image.draw(&mut disp).unwrap();
-
     lcd_led.set_high().unwrap();
     led_pin.set_high().unwrap();
 
-    let mut counter = 0;
-    let mut first_draw = true;
+    let mut green_led_pin = pins.gpio2.into_push_pull_output();
+    let mut blue1_led_pin = pins.gpio3.into_push_pull_output();
+    let mut blue2_led_pin = pins.gpio4.into_push_pull_output();
+    let mut red_led_pin = pins.gpio5.into_push_pull_output();
 
+    let mut buzzer_pin = pins.gpio26.into_push_pull_output();
+
+    green_led_pin.set_high().unwrap();
+    blue1_led_pin.set_high().unwrap();
+    blue2_led_pin.set_high().unwrap();
+    red_led_pin.set_high().unwrap();
+    buzzer_pin.set_high().unwrap();
+
+    delay.delay_ms(1000u32);
+
+    green_led_pin.set_low().unwrap();
+    blue1_led_pin.set_low().unwrap();
+    blue2_led_pin.set_low().unwrap();
+    red_led_pin.set_low().unwrap();
+    buzzer_pin.set_low().unwrap();
 
     let uart_pins = (
-        // UART TX (characters sent from RP2040) on pin 1 (GPIO0)
-        // pins.gpio4.into_function(),
         pins.gpio16.into_function(),
-        // UART RX (characters received by RP2040) on pin 2 (GPIO1)
-        // pins.gpio5.into_function(),
         pins.gpio17.into_function(),
     );
     let mut uart = hal::uart::UartPeripheral::new(pac.UART0, uart_pins, &mut pac.RESETS)
@@ -169,117 +180,27 @@ fn main() -> ! {
         )
         .unwrap();
 
-    let mut uart_buffer = [0u8; 10];
-    loop {
-        uart_buffer = [0u8; 10];
-        let mut lines_to_display: [Option<&str>; 10] = [None; 10];
-        if uart.uart_is_writable() {
-            // info!("uart is writable. {}",counter);
-            _ = uart.flush();
-            
-            uart.write_full_blocking(b" hello world. msg from pico");
-            // let uart_write_result = uart.write('q' as u8).unwrap();
-
-        }
-        if uart.uart_is_readable() {
-            // info!("UART is readable");
-            
-            // _ = uart.flush();
-            let uart_read_result = uart.read_full_blocking(&mut uart_buffer);
-
-            // let uart_read_result = uart.read();
-            match uart_read_result {
-                Ok(_) => {
-                    let uart_buffer_str = core::str::from_utf8(&uart_buffer).unwrap();
-                    info!("UART Read: {:?}", uart_buffer_str);
-                    lines_to_display[6] = Some(uart_buffer_str);
-                }
-                Err(err) => {
-                    let mut message = "";
-                    // let err_map = err.map(|e| {
-                    //     message = match e
-                    //     {
-                    //         uart::ReadErrorType::Break => "UART Read: Break",
-                    //         uart::ReadErrorType::Overrun => "UART Read: Overrun",
-                    //         uart::ReadErrorType::Parity => "UART Read: Parity",
-                    //         uart::ReadErrorType::Framing => "UART Read: Framing"
-                    //     };
-                    // });
-
-                    let message = match err   {
-                        uart::ReadErrorType::Break => "UART Read: Break",
-                        uart::ReadErrorType::Overrun => "UART Read: Overrun",
-                        uart::ReadErrorType::Parity => "UART Read: Parity",
-                        uart::ReadErrorType::Framing => "UART Read: Framing"
-                    };
-                    lines_to_display[7] = Some(message);
-                }
-            }
-            _ = uart.flush();
-        } else {
-            lines_to_display[8] = Some("UART serial not available");
-        }
-
-        // ----- START draw on the screen ------
-        // todo move to separate function
-        // disp.clear(Rgb565::BLACK).unwrap();
+    let mut mc = Multicore::new(&mut pac.PSM, &mut pac.PPB, &mut sio.fifo);
+    let cores = mc.cores();
+    let core1 = &mut cores[1];
 
 
-        counter += 1;
+    let mut down_button_pin = pins.gpio21.into_pull_up_input();
+    let mut up_button_pin = pins.gpio19.into_pull_up_input();
+    let mut left_button_pin = pins.gpio18.into_pull_up_input();
+    let mut right_button_pin = pins.gpio22.into_pull_up_input();
+    let mut ok_button_pin = pins.gpio20.into_pull_up_input();
 
-        let counter_buffer = itoa(counter);
-        let counter_str = core::str::from_utf8(&counter_buffer).unwrap();
-        lines_to_display[1] = Some(&counter_str);
-        lines_to_display[0] = Some("Hello, world!");
-        let mut index = 0;
+    let _test = core1.spawn(unsafe { &mut CORE1_STACK.mem }, move || {
+        jobs::core0(
+            &mut uart,
+            &mut down_button_pin,
+            &mut up_button_pin,
+            &mut left_button_pin,
+            &mut right_button_pin,
+            &mut ok_button_pin,
+        );
+    });
 
-
-        for line in lines_to_display {
-            let offset_y = (12 * (index + 1)) + 1;
-
-            // I did not find a way to make something like - `to_str(num:i32) -> str`
-            let num_line_buffer = itoa(index + 1);
-            let num_line_str = core::str::from_utf8(&num_line_buffer).unwrap();
-
-            // draw line and line number when first draw
-            if first_draw {
-                _ = Text::new(
-                    num_line_str,
-                    Point::new(0, offset_y),
-                    MonoTextStyle::new(&FONT_6X12, Rgb565::WHITE),
-                ).draw(&mut disp).unwrap();
-
-                _ = Line::new(
-                    Point::new(2, offset_y + 2),
-                    Point::new(125, offset_y + 2),
-                )
-                    .into_styled(PrimitiveStyle::with_stroke(Rgb565::BLUE, 1))
-                    .draw(&mut disp).unwrap();
-            }
-
-            _ = Rectangle::new(
-                Point::new(15, offset_y - 8),
-                Size::new(113, 10),
-            ).into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK)).draw(&mut disp).unwrap();
-
-            if let Some(line) = line {
-                // Clean up area for text
-
-
-                // write text
-                _ = Text::new(
-                    line,
-                    Point::new(15, offset_y),
-                    MonoTextStyle::new(&FONT_6X12, Rgb565::RED),
-                ).draw(&mut disp).unwrap();
-            }
-            index += 1;
-        }
-
-        first_draw = false;
-
-        // ----- END draw on the screen ------
-    }
+    jobs::core1(&mut disp);
 }
-
-// End of file
