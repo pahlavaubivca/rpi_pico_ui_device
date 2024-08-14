@@ -82,10 +82,10 @@ You can apply the rule changes with the following command:
 ![img_3.png](img_3.png)
 
 Orange
-TX/SC (Output from Probe)
+TX/SC (swclk) (Output from Probe)
 
 Black
 GND
 
 Yellow
-RX/SD (Input to Probe or I/O) 
+RX/SD (swdio)(Input to Probe or I/O) 

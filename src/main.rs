@@ -4,6 +4,7 @@
 pub mod lcd;
 mod utils;
 mod jobs;
+mod error_types;
 
 extern crate embedded_hal;
 extern crate panic_halt;
@@ -175,14 +176,20 @@ fn main() -> ! {
     );
     let mut uart = hal::uart::UartPeripheral::new(pac.UART0, uart_pins, &mut pac.RESETS)
         .enable(
-            UartConfig::new(19_200.Hz(), DataBits::Eight, None, StopBits::One),
+            UartConfig::new(
+                // 9600.Hz(),
+                115_200.Hz(),
+                //19_200.Hz(),
+                DataBits::Seven,
+                None,
+                StopBits::One),
             clocks.peripheral_clock.freq(),
         )
         .unwrap();
 
     let mut mc = Multicore::new(&mut pac.PSM, &mut pac.PPB, &mut sio.fifo);
     let cores = mc.cores();
-    let core1 = &mut cores[1];
+    let core0 = &mut cores[1];
 
 
     let mut down_button_pin = pins.gpio21.into_pull_up_input();
@@ -190,8 +197,8 @@ fn main() -> ! {
     let mut left_button_pin = pins.gpio18.into_pull_up_input();
     let mut right_button_pin = pins.gpio22.into_pull_up_input();
     let mut ok_button_pin = pins.gpio20.into_pull_up_input();
-
-    let _test = core1.spawn(unsafe { &mut CORE1_STACK.mem }, move || {
+    
+    let _test = core0.spawn(unsafe { &mut CORE1_STACK.mem }, move || {
         jobs::core0(
             &mut uart,
             &mut down_button_pin,

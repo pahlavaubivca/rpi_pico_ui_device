@@ -1,6 +1,13 @@
+use core::convert::Infallible;
+use core::fmt::Write;
+use core::ops::Deref;
+use core::slice;
+use core::str::Utf8Error;
+use cortex_m::asm::delay;
 use cortex_m::delay::Delay;
+
 use cortex_m::prelude::_embedded_hal_serial_Write;
-use defmt::println;
+use defmt::{debug, Format, Formatter, info, println};
 use embedded_graphics::mono_font::ascii::FONT_6X12;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::prelude::Primitive;
@@ -8,22 +15,67 @@ use embedded_graphics::primitives::{Line, PrimitiveStyle};
 use embedded_graphics::text::Text;
 use embedded_graphics_core::Drawable;
 use embedded_graphics_core::geometry::{Point, Size};
+use embedded_graphics_core::pixelcolor::raw::ToBytes;
 use embedded_graphics_core::pixelcolor::Rgb565;
 use embedded_graphics_core::prelude::RgbColor;
 use embedded_graphics_core::primitives::Rectangle;
 use embedded_hal::digital::{InputPin, OutputPin};
 use heapless::String;
-use rp2040_hal::fugit::RateExtU32;
-use rp2040_hal::{Clock, pac, Sio, uart};
-use rp2040_hal::gpio::{FunctionSio, Pin, PullDown, PullType, PullUp, SioInput, SioOutput, ValidFunction};
+use rp2040_hal::{Clock, pac, Sio, Timer, uart};
+use rp2040_hal::gpio::{Error, FunctionSio, Pin, PullUp, SioInput, ValidFunction};
 use rp2040_hal::spi::{SpiDevice, ValidSpiPinout};
 use rp2040_hal::uart::{DataBits, ReadErrorType, StopBits, UartConfig, UartDevice, UartPeripheral, ValidUartPinout};
 use ::{rp2040_hal as hal, XTAL_FREQ_HZ};
 use lcd::lcd::ST7735;
 use utils::itoa::itoa;
 
-//todo read about ! mark as return type
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum KeyboardCodes {
+    Up,
+    Down,
+    Left,
+    Right,
+    Ok,
+}
+impl KeyboardCodes {
+    pub fn as_u8(&self) -> u8 {
+        match self {
+            KeyboardCodes::Up => 'u' as u8,
+            KeyboardCodes::Down => 'd' as u8,
+            KeyboardCodes::Left => 'l' as u8,
+            KeyboardCodes::Right => 'r' as u8,
+            KeyboardCodes::Ok => 'o' as u8,
+        }
+    }
 
+    //obsolete
+    pub fn as_char(&self) -> char {
+        match self {
+            KeyboardCodes::Up => 'u',
+            KeyboardCodes::Down => 'd',
+            KeyboardCodes::Left => 'l',
+            KeyboardCodes::Right => 'r',
+            KeyboardCodes::Ok => 'o',
+        }
+    }
+}
+
+pub struct Pico2PiMessage {
+    pub wh: Option<[i32; 2]>,
+    //todo: add multi-key press
+    pub keyboard_codes: Option<KeyboardCodes>,
+}
+
+pub struct Pi2PicoMessage {
+    pub marker_position_row: Option<isize>,
+    pub marker_position_col: Option<isize>,
+    pub top_row: Option<([[u8; 3]; 4], [u8; 3])>, //IP/battery %
+    pub bottom_row: Option<([u8; 5], [u8; 6], [u8; 5])>, //<- goto/select/goto->
+    pub header: Option<([u8; 15], [u8; 5])>, //first header title, second page/total pages
+    pub lines: [Option<[u8; 20]>; 9],
+}
+
+//todo read about ! mark as return type
 /// Core responsible for handling keyboard input, uart IO
 pub fn core0<
     D: UartDevice,
@@ -33,7 +85,6 @@ pub fn core0<
     IL: ValidFunction<FunctionSio<SioInput>>,
     IR: ValidFunction<FunctionSio<SioInput>>,
     IOK: ValidFunction<FunctionSio<SioInput>>,
-
 >(
     uart: &mut UartPeripheral<rp2040_hal::uart::Enabled, D, P>,
     down_button_pin: &mut Pin<ID, FunctionSio<SioInput>, PullUp>,
@@ -55,6 +106,7 @@ pub fn core0<
     // );
     let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
 
+
     // Configure the clocks
     let clocks = hal::clocks::init_clocks_and_plls(
         XTAL_FREQ_HZ,
@@ -67,102 +119,186 @@ pub fn core0<
     )
         .ok()
         .unwrap();
+    let timer = Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
     let mut counter = 0;
     //button_pin.set_input_enable(true);
     // button_pin.set_high();
-    loop {
-        let is_down_button_pressed = down_button_pin.is_low().unwrap();
-        let is_up_button_pressed = up_button_pin.is_low().unwrap();
-        let is_left_button_pressed = left_button_pin.is_low().unwrap();
-        let is_right_button_pressed = right_button_pin.is_low().unwrap();
-        let is_ok_button_pressed = ok_button_pin.is_low().unwrap();
-        println!("button down is pressed {:?}", is_down_button_pressed);
-        println!("button up is pressed {:?}", is_up_button_pressed);
-        println!("button left is pressed {:?}", is_left_button_pressed);
-        println!("button right is pressed {:?}", is_right_button_pressed);
-        println!("button ok is pressed {:?}", is_ok_button_pressed);
+    let mut full_message: String<100> = String::new();
 
-        if uart.uart_is_writable() {
-            if is_down_button_pressed {
-                _ = uart.flush();
-                let uart_write_result = uart.write('d' as u8).unwrap();
-            } else if is_up_button_pressed {
-                _ = uart.flush();
-                let uart_write_result = uart.write('u' as u8).unwrap();
+
+    let mut timestamp = timer.get_counter().ticks();
+
+    let mut keycode_to_send_option: Option<KeyboardCodes> = None;
+    let mut keydown_code_option: Option<KeyboardCodes> = None;
+
+    let mut keydown_timestamp = timer.get_counter().ticks();
+    
+    uart.enable_tx_interrupt();
+    
+    loop {
+        let general_timer = timer.get_counter().ticks();
+        if down_button_pin.is_low().unwrap() {
+            keydown_code_option = Some(KeyboardCodes::Down);
+        } else if up_button_pin.is_low().unwrap() {
+            keydown_code_option = Some(KeyboardCodes::Up);
+        } else if left_button_pin.is_low().unwrap() {
+            keydown_code_option = Some(KeyboardCodes::Left);
+        } else if right_button_pin.is_low().unwrap() {
+            keydown_code_option = Some(KeyboardCodes::Right);
+        } else if ok_button_pin.is_low().unwrap() {
+            keydown_code_option = Some(KeyboardCodes::Ok);
+        } else {
+            if keydown_code_option.is_some() {
+                println!("reset keystroke code");
             }
-            // uart.write_full_blocking(b"Hello, world! from core1");
-            // let uart_write_result = uart.write('q' as u8).unwrap();
+            // keydown_loop_cycles = 0;
+            keydown_timestamp = 0u64;
+            keydown_code_option = None;
+        }
+
+        if let Some(ckc) = keydown_code_option {
+            if keycode_to_send_option.is_none() {
+                println!("keydown_code_option: {:?}", ckc.as_u8());
+            }
+            // keydown_loop_cycles += 1;
+            if keydown_timestamp == 0 {
+                keydown_timestamp = general_timer;
+            }
+            // keydown_timestamp = timer.get_counter().ticks()-keydown_timestamp;
+            keycode_to_send_option = Some(ckc);
         }
 
 
         let mut lines_to_send: [Option<(&str, bool)>; 10] = [None; 10];
         lines_to_send[0] = Some(("Hello, world! from core1", false));
-        if uart.uart_is_readable() {
-            println!("UART is readable");
-            let mut len_buffer = [0u8; 4];
-            let len_buf_result = uart.read_full_blocking(&mut len_buffer);
-            if len_buf_result.is_ok() {
-                let len = u32::from_be_bytes(len_buffer);
-                println!("Received len: {:?}", len);
-                let mut buffer = [0u8; 32];
-                let mut index = 0;
-                let mut text_buffer: String<2048> = String::new();
-                while len > index * 32 {
-                    println!("Reading: {:?}", index);
-                    buffer = [0u8; 32];
-                    let read_result = uart.read_full_blocking(&mut buffer);
-                    match read_result {
-                        Ok(_) => {
-                            let uart_buffer_str = core::str::from_utf8(&buffer).unwrap();
-                            text_buffer.push_str(uart_buffer_str).unwrap();
-                            // let result = concat_strs_simple(str, uart_buffer_str);
-                            // str = core::str::from_utf8(&result).unwrap();
 
-                            println!("Received str: {:?}", uart_buffer_str);
-                            index += 1;
+        if uart.uart_is_readable() {
+            let mut buffer = [0u8; 100];
+            // let mut index = 0;
+            let mut text_buffer: String<2048> = String::new();
+            // let mut is_complete = false;
+            // // while !is_complete {
+            // println!("Reading from UART");
+            // buffer = [0u8; 100];
+            // println!("before read full blocking");
+            // let read_result = uart.read_full_blocking(&mut buffer);
+            // println!("after read full blocking");
+            // match read_result {
+            //     Ok(_) => {
+            //         // let uart_buffer_str = core::str::from_utf8(&buffer).unwrap();
+            //         println!("match core::str::from_utf8(&buffer)");
+            //         match core::str::from_utf8(&buffer) {
+            //             Ok(uart_buffer_str) => {
+            //                 println!("Received uart_buffer_str and push to text_buffer: {:?}", uart_buffer_str);
+            //                 text_buffer.push_str(uart_buffer_str).unwrap();
+            //                 // uart.flush();
+            //                 println!("Pushed to text_buffer variable");
+            //                 // index += 1;
+            //                 // if uart_buffer_str.contains("\r\n") {
+            //                 //     println!("Buffer contains \\r\\n");
+            //                 //     is_complete = true;
+            //                 // }
+            //             }
+            //             Err(err) => {
+            //                 // err.description()
+            //                 println!("Error reading core::str::from_utf8(&buffer)");
+            //             }
+            //         }
+            // 
+            //         // let result = concat_strs_simple(str, uart_buffer_str);
+            //         // str = core::str::from_utf8(&result).unwrap();
+            //     }
+            //     Err(err) => {
+            //         let message = match err {
+            //             uart::ReadErrorType::Break => "UART Read: Break",
+            //             uart::ReadErrorType::Overrun => "UART Read: Overrun",
+            //             uart::ReadErrorType::Parity => "UART Read: Parity",
+            //             uart::ReadErrorType::Framing => "UART Read: Framing"
+            //         };
+            //         println!("Error reading {:?}", message);
+            //     }
+            // }
+            // }
+
+            let lines_to_send = split_lines(text_buffer.as_str())
+                .map(|line| Some(line));
+        }
+
+        //run this block every 250ms
+        if general_timer - timestamp > 250_000 {
+            if uart.uart_is_writable() {
+                // println!("keycode_to_send_option: {:?}", keycode.as_u8());
+                let mut is_keys_the_same = false;
+                if keydown_code_option.is_some() {
+                    // is_keys_the_same = keydown_code_option.eq(&Some(*keycode));
+                    is_keys_the_same = keydown_code_option.eq(&keycode_to_send_option);
+                    // println!("is_keys_the_same {:?}", is_keys_the_same);
+                }
+
+                let mut kd_ms = 0;
+                if keydown_timestamp > 0 {
+                    kd_ms = (general_timer - keydown_timestamp) / 1_000;
+                    // println!("keydown ms: {:?}", kd_ms);
+                }
+                //todo: maybe move logic with send message after 1 sec to state machine?
+                let keyup_or_keypress_more_than_sec = (
+                    keydown_code_option.is_none() ||
+                        is_keys_the_same && kd_ms > 1000
+                );
+
+                if keycode_to_send_option.is_some() && keyup_or_keypress_more_than_sec
+                {
+                    let keycode = keycode_to_send_option.unwrap();
+                    let mut message: String<50> = String::new();
+                    message.push_str("&wh=").unwrap();
+                    message.push_str("128,128").unwrap();
+                    message.push_str("&kc=").unwrap();
+                    message.push(keycode.as_char()).unwrap();
+                    message.push_str("&keypressms=").unwrap();
+
+                    let kd_str_slice: String<5> = String::from(kd_ms);
+                    message.push_str(kd_str_slice.as_str()).unwrap();
+
+                    println!("reset keystroke code");
+                    keycode_to_send_option = None;
+
+                    let message_len = message.len() as u8;
+                    let message_len_string: String<4> = String::from(message_len);
+                    full_message = String::new();
+                    full_message.push_str(" ").unwrap();
+                    full_message.push_str("len=").unwrap();
+                    full_message.push_str(message_len_string.as_str()).unwrap();
+                    full_message.push_str(message.as_str()).unwrap();
+                    full_message.push_str("\r\n\r\n").unwrap();
+                    // full_message.push(';').unwrap();
+                    println!("Message to send: {:?}", full_message.as_str());
+                    match uart.write_str(full_message.as_str()) {
+                        Ok(_) => {
+                            // uart.flush();
                         }
                         Err(err) => {
-                            let message = match err {
-                                uart::ReadErrorType::Break => "UART Read: Break",
-                                uart::ReadErrorType::Overrun => "UART Read: Overrun",
-                                uart::ReadErrorType::Parity => "UART Read: Parity",
-                                uart::ReadErrorType::Framing => "UART Read: Framing"
-                            };
-                            println!("Error reading {:?}", message);
+                            println!("Error writing to UART");
                         }
                     }
-
-                    
                 }
-                _ = uart.flush();
-                let lines_to_send = split_lines(text_buffer.as_str())
-                    .map(|line| Some(line));
             }
+            // info!("Loop running {:?} sec.",general_timer/1_000_000);
+            timestamp = general_timer;
         }
-        println!("Sending: {:?}", lines_to_send.len());
-        // lines_to_send[0] = Some(("Hello, world! from core1", false));
-        // let counter_buffer = itoa(counter);
-        // let counter_str = core::str::from_utf8(&counter_buffer).unwrap();
-        // lines_to_send[1] = Some(&counter_str);
-        //let some_str = "Hello, world! from core0 for core 1 to read";
-        // println!("Sending: {}", some_str);
-        //sio.fifo.write_blocking(some_str.as_ptr() as u32);
-
-        // sio.fifo.write(&lines_to_send as *const _ as u32);
-
+        // clocks.system_clock.
         sio.fifo.write(&lines_to_send as *const _ as u32);
-        // delay.delay_ms(100u32);
-        counter += 1;
+        // delay.delay_ms(1000u32);
     }
 }
 
 /// Responsible for drawing on screen
-pub fn core1<DC, RST, D, PP>(display: &mut ST7735<DC, RST, D, PP>) -> ! where
+pub fn core1<DC, RST, D, PP>(display: &mut ST7735<DC, RST, D, PP>) -> !
+where
     DC: OutputPin,
     RST: OutputPin,
     D: SpiDevice,
-    PP: ValidSpiPinout<D>
+    PP: ValidSpiPinout<D>,
 {
     println!("Hello, world! from core1");
     let mut _sio = unsafe { pac::Peripherals::steal() }.SIO;
@@ -219,6 +355,7 @@ pub fn core1<DC, RST, D, PP>(display: &mut ST7735<DC, RST, D, PP>) -> ! where
             index += 1;
         }
         first_draw = false;
+        // delay.delay_ms(50u32);
         // if let Some(word) = lines {
         //     println!("Received: {}", word);
         //     // delay.delay_ms(word);
@@ -256,3 +393,15 @@ fn split_lines(input: &str) -> [&str; 10] {
 
     result
 }
+
+// fn u64_to_str(num: u64) -> str {
+//     let s = unsafe {
+//         // First, we build a &[u8]...
+//         let slice = slice::from_raw_parts(&num, num.to_be_bytes().len());
+//
+//         // ... and then convert that slice into a string slice
+//         str::from_utf8(slice)
+//     }
+//         .unwrap();
+//     s
+// }
