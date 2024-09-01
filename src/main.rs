@@ -4,7 +4,7 @@
 pub mod lcd;
 mod utils;
 mod jobs;
-mod error_types;
+mod messages;
 
 extern crate embedded_hal;
 extern crate panic_halt;
@@ -15,6 +15,7 @@ extern crate cortex_m;
 extern crate defmt;
 extern crate defmt_rtt;
 extern crate heapless;
+// extern crate alloc;
 // extern crate panic_probe;
 
 use core::any::{Any, TypeId};
@@ -25,6 +26,7 @@ use cortex_m::prelude::{_embedded_hal_serial_Read, _embedded_hal_serial_Write};
 // use core::fmt::Debug;
 // use cortex_m::prelude::_embedded_hal_serial_Read;
 use defmt::*;
+use defmt::export::panic;
 use embedded_graphics::mono_font::ascii::FONT_6X12;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::prelude::Primitive;
@@ -46,7 +48,7 @@ use rp2040_hal::clocks::Clock;
 use rp2040_hal::fugit::RateExtU32;
 use rp2040_hal::multicore::{Multicore, Stack};
 use rp2040_hal::uart;
-use rp2040_hal::uart::{DataBits, Error, StopBits, UartConfig};
+use rp2040_hal::uart::{DataBits, Error, Parity, StopBits, UartConfig};
 use jobs::core0;
 use lcd::lcd::{Orientation, ST7735};
 use utils::itoa::itoa;
@@ -107,6 +109,8 @@ fn main() -> ! {
         sio.gpio_bank0,
         &mut pac.RESETS,
     );
+    // panic();
+    // hal::panic!("some panic message");
 
     // Configure GPIO25 as an output
     let mut led_pin = pins.gpio25.into_push_pull_output();
@@ -180,8 +184,8 @@ fn main() -> ! {
                 // 9600.Hz(),
                 115_200.Hz(),
                 //19_200.Hz(),
-                DataBits::Seven,
-                None,
+                DataBits::Eight,
+                Some(Parity::Odd),
                 StopBits::One),
             clocks.peripheral_clock.freq(),
         )
@@ -197,7 +201,7 @@ fn main() -> ! {
     let mut left_button_pin = pins.gpio18.into_pull_up_input();
     let mut right_button_pin = pins.gpio22.into_pull_up_input();
     let mut ok_button_pin = pins.gpio20.into_pull_up_input();
-    
+
     let _test = core0.spawn(unsafe { &mut CORE1_STACK.mem }, move || {
         jobs::core0(
             &mut uart,

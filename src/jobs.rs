@@ -1,4 +1,4 @@
-use core::convert::Infallible;
+use core::convert::{Infallible, TryFrom};
 use core::fmt::Write;
 use core::ops::Deref;
 use core::slice;
@@ -20,13 +20,15 @@ use embedded_graphics_core::pixelcolor::Rgb565;
 use embedded_graphics_core::prelude::RgbColor;
 use embedded_graphics_core::primitives::Rectangle;
 use embedded_hal::digital::{InputPin, OutputPin};
-use heapless::String;
+use heapless::{String, Vec};
+
 use rp2040_hal::{Clock, pac, Sio, Timer, uart};
 use rp2040_hal::gpio::{Error, FunctionSio, Pin, PullUp, SioInput, ValidFunction};
 use rp2040_hal::spi::{SpiDevice, ValidSpiPinout};
 use rp2040_hal::uart::{DataBits, ReadErrorType, StopBits, UartConfig, UartDevice, UartPeripheral, ValidUartPinout};
 use ::{rp2040_hal as hal, XTAL_FREQ_HZ};
 use lcd::lcd::ST7735;
+use messages::pi_2_pico_message::Pi2PicoTest;
 use utils::itoa::itoa;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -66,14 +68,6 @@ pub struct Pico2PiMessage {
     pub keyboard_codes: Option<KeyboardCodes>,
 }
 
-pub struct Pi2PicoMessage {
-    pub marker_position_row: Option<isize>,
-    pub marker_position_col: Option<isize>,
-    pub top_row: Option<([[u8; 3]; 4], [u8; 3])>, //IP/battery %
-    pub bottom_row: Option<([u8; 5], [u8; 6], [u8; 5])>, //<- goto/select/goto->
-    pub header: Option<([u8; 15], [u8; 5])>, //first header title, second page/total pages
-    pub lines: [Option<[u8; 20]>; 9],
-}
 
 //todo read about ! mark as return type
 /// Core responsible for handling keyboard input, uart IO
@@ -133,9 +127,21 @@ pub fn core0<
     let mut keydown_code_option: Option<KeyboardCodes> = None;
 
     let mut keydown_timestamp = timer.get_counter().ticks();
-    
-    uart.enable_tx_interrupt();
-    
+
+    // uart.enable_tx_interrupt();
+    let mut text_buffer: String<2048> = String::new();
+
+    // let mut lines_to_send: [Option<(&str, bool)>; 10] = [None; 10];
+    // lines_to_send[5] = Some(("hw! core1", false));
+
+    let mut ks: String<50> = String::new();
+
+    let mut lines_so_send: [Option<(String<50>, bool)>; 10] = Default::default();
+    // let mut lines_so_send: [Option<(String<50>, bool)>; 10] = [None,None,None,None,None,None,None,None,None,None];
+    lines_so_send[5] = Some((String::from("hw! core1"), false));
+    // lines_so_send[5] = Some((&String::from("hw! core1"), false));
+
+    // println!("lines_so_send: {:?}", lines_so_send[0]);
     loop {
         let general_timer = timer.get_counter().ticks();
         if down_button_pin.is_low().unwrap() {
@@ -149,80 +155,73 @@ pub fn core0<
         } else if ok_button_pin.is_low().unwrap() {
             keydown_code_option = Some(KeyboardCodes::Ok);
         } else {
-            if keydown_code_option.is_some() {
-                println!("reset keystroke code");
-            }
-            // keydown_loop_cycles = 0;
             keydown_timestamp = 0u64;
             keydown_code_option = None;
         }
 
         if let Some(ckc) = keydown_code_option {
-            if keycode_to_send_option.is_none() {
-                println!("keydown_code_option: {:?}", ckc.as_u8());
-            }
-            // keydown_loop_cycles += 1;
             if keydown_timestamp == 0 {
                 keydown_timestamp = general_timer;
             }
-            // keydown_timestamp = timer.get_counter().ticks()-keydown_timestamp;
             keycode_to_send_option = Some(ckc);
         }
 
-
-        let mut lines_to_send: [Option<(&str, bool)>; 10] = [None; 10];
-        lines_to_send[0] = Some(("Hello, world! from core1", false));
-
         if uart.uart_is_readable() {
-            let mut buffer = [0u8; 100];
-            // let mut index = 0;
-            let mut text_buffer: String<2048> = String::new();
-            // let mut is_complete = false;
-            // // while !is_complete {
-            // println!("Reading from UART");
-            // buffer = [0u8; 100];
-            // println!("before read full blocking");
-            // let read_result = uart.read_full_blocking(&mut buffer);
-            // println!("after read full blocking");
-            // match read_result {
-            //     Ok(_) => {
-            //         // let uart_buffer_str = core::str::from_utf8(&buffer).unwrap();
-            //         println!("match core::str::from_utf8(&buffer)");
-            //         match core::str::from_utf8(&buffer) {
-            //             Ok(uart_buffer_str) => {
-            //                 println!("Received uart_buffer_str and push to text_buffer: {:?}", uart_buffer_str);
-            //                 text_buffer.push_str(uart_buffer_str).unwrap();
-            //                 // uart.flush();
-            //                 println!("Pushed to text_buffer variable");
-            //                 // index += 1;
-            //                 // if uart_buffer_str.contains("\r\n") {
-            //                 //     println!("Buffer contains \\r\\n");
-            //                 //     is_complete = true;
-            //                 // }
-            //             }
-            //             Err(err) => {
-            //                 // err.description()
-            //                 println!("Error reading core::str::from_utf8(&buffer)");
-            //             }
-            //         }
-            // 
-            //         // let result = concat_strs_simple(str, uart_buffer_str);
-            //         // str = core::str::from_utf8(&result).unwrap();
-            //     }
-            //     Err(err) => {
-            //         let message = match err {
-            //             uart::ReadErrorType::Break => "UART Read: Break",
-            //             uart::ReadErrorType::Overrun => "UART Read: Overrun",
-            //             uart::ReadErrorType::Parity => "UART Read: Parity",
-            //             uart::ReadErrorType::Framing => "UART Read: Framing"
-            //         };
-            //         println!("Error reading {:?}", message);
-            //     }
-            // }
-            // }
+            let mut buffer = [0u8; 1];
+            let read_result = uart.read_full_blocking(&mut buffer);
+            match read_result {
+                Ok(_) => {
+                    match core::str::from_utf8(&buffer) {
+                        Ok(uart_buffer_str) => {
+                            text_buffer.push_str(uart_buffer_str).unwrap();
+                            // uart.flush();
+                            // println!("Buffer: {:?}", uart_buffer_str);
+                            if text_buffer.contains("\r\n") {
+                                println!("Buffer contains \\r\\n");
+                                // let str_clone = text_buffer.clone();
+                                // let kv = parse_to_kv(&text_buffer);
+                                // println!("KV: {:?}", kv);
+                                let pi_2_pico_test = Pi2PicoTest::try_from(&text_buffer);
+                                println!("Pi2PicoTest::try_from(&text_buffer)");//::try_from(text_buffer);
+                                match pi_2_pico_test {
+                                    Ok(val) => {
+                                        println!("Pi2PicoTest: {:?}", val.kc);
 
-            let lines_to_send = split_lines(text_buffer.as_str())
-                .map(|line| Some(line));
+                                        // ks.clear();
+                                        // match ks.push(val.kc as char) {
+                                        //     Ok(_) => {
+                                        //         println!("ks pushed successfully")
+                                        //     }
+                                        //     Err(_) => {
+                                        //         println!("ks push failed")
+                                        //     }
+                                        // }
+                                        // let ks_str = ks.clone();
+                                        // let ks_str = ks.clone();
+
+                                        // Store the owned String in `lines_so_send`
+                                        // lines_so_send[1] = Some((String::from(val.kc as u8), false));
+                                    }
+                                    Err(_) => {}
+                                }
+                                text_buffer.clear();
+                            }
+                        }
+                        Err(err) => {
+                            println!("Error reading core::str::from_utf8(&buffer)");
+                        }
+                    }
+                }
+                Err(err) => {
+                    let message = match err {
+                        uart::ReadErrorType::Break => "UART Read: Break",
+                        uart::ReadErrorType::Overrun => "UART Read: Overrun",
+                        uart::ReadErrorType::Parity => "UART Read: Parity",
+                        uart::ReadErrorType::Framing => "UART Read: Framing"
+                    };
+                    println!("Error reading {:?}", message);
+                }
+            }
         }
 
         //run this block every 250ms
@@ -257,37 +256,58 @@ pub fn core0<
                     message.push(keycode.as_char()).unwrap();
                     message.push_str("&keypressms=").unwrap();
 
+
+                    //todo: remove this. its only for button debug
+                    let mut message_to_screen:String<50> = String::from("kc: ");
+                    message_to_screen.push(keycode.as_char()).unwrap();
+                    lines_so_send[2] = Some((message_to_screen, false));
+                    //
+
                     let kd_str_slice: String<5> = String::from(kd_ms);
                     message.push_str(kd_str_slice.as_str()).unwrap();
 
-                    println!("reset keystroke code");
                     keycode_to_send_option = None;
 
                     let message_len = message.len() as u8;
                     let message_len_string: String<4> = String::from(message_len);
                     full_message = String::new();
-                    full_message.push_str(" ").unwrap();
+                    // full_message.push_str(" ").unwrap();
                     full_message.push_str("len=").unwrap();
                     full_message.push_str(message_len_string.as_str()).unwrap();
                     full_message.push_str(message.as_str()).unwrap();
                     full_message.push_str("\r\n\r\n").unwrap();
+                    // full_message.push('\0').unwrap();
+                    // full_message.push_str("\0").unwrap();
                     // full_message.push(';').unwrap();
                     println!("Message to send: {:?}", full_message.as_str());
-                    match uart.write_str(full_message.as_str()) {
-                        Ok(_) => {
-                            // uart.flush();
-                        }
-                        Err(err) => {
-                            println!("Error writing to UART");
-                        }
+                    for i in 0..full_message.len() {
+                        // only write char and write blocking works as expected for now
+                        let byte_to_send = full_message.as_bytes()[i];
+                        uart.write_char(byte_to_send as char).map_err(|_| {
+                            println!("Error writing to UART char {:?}", byte_to_send);
+                        }).unwrap();
+                        // uart.write_full_blocking(&[byte_to_send]);
                     }
+                    // uart.write_full_blocking(full_message.as_bytes());
+
+                    // uart.flush();
+                    // match uart.write_str(full_message.as_str()) {
+                    //     Ok(_) => {
+                    //         uart.flush();
+                    //     }
+                    //     Err(err) => {
+                    //         println!("Error writing to UART");
+                    //     }
+                    // }
                 }
             }
             // info!("Loop running {:?} sec.",general_timer/1_000_000);
             timestamp = general_timer;
         }
         // clocks.system_clock.
-        sio.fifo.write(&lines_to_send as *const _ as u32);
+
+        sio.fifo.write(&lines_so_send as *const _ as u32);
+
         // delay.delay_ms(1000u32);
     }
 }
@@ -306,16 +326,16 @@ where
     let mut first_draw = true;
     loop {
         //  println!("core1 loop");
-        let lines_ptr = sio.fifo.read_blocking() as *const [Option<&str>; 10];
+        //let lines_ptr = sio.fifo.read_blocking() as *const Vec<Option<(String<50>, bool)>, 10>;
+
+        // let lines_ptr = sio.fifo.read_blocking() as *const [String<50>; 10];
+        let lines_ptr = sio.fifo.read_blocking() as *const [Option<(String<50>, bool)>; 10];
         // println!("Received: {:?}", lines_ptr);
         let lines = unsafe { &*lines_ptr };
-
-        // println!("Received: {:?}", lines);
 
         let mut index = 0;
         for line in lines {
             let offset_y = (12 * (index + 1)) + 1;
-
             // I did not find a way to make something like - `to_str(num:i32) -> str`
             let num_line_buffer = itoa(index + 1);
             let num_line_str = core::str::from_utf8(&num_line_buffer).unwrap();
@@ -341,13 +361,18 @@ where
                 Size::new(113, 10),
             ).into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK)).draw(display).unwrap();
 
+            // _ = Text::new(
+            //     line.as_str(),
+            //     Point::new(15, offset_y),
+            //     MonoTextStyle::new(&FONT_6X12, Rgb565::RED),
+            // ).draw(display).unwrap();
             if let Some(line) = line {
                 // Clean up area for text
 
 
                 // write text
                 _ = Text::new(
-                    line,
+                    line.0.as_str(),
                     Point::new(15, offset_y),
                     MonoTextStyle::new(&FONT_6X12, Rgb565::RED),
                 ).draw(display).unwrap();
@@ -376,15 +401,28 @@ fn concat_strs_simple(a: &str, b: &str) -> [u8; 32] {
     buffer
 }
 
-fn split_lines(input: &str) -> [&str; 10] {
+// impl Copy for String<100>{}
+//     
+// }
+
+fn cursor_index(kv: Vec<(&str, &str), 100>) -> Option<usize> {
+    for x in kv.iter() {
+        if x.0 == "cursor" {
+            return Some(x.1.parse::<usize>().unwrap());
+        }
+    }
+    None
+}
+fn parse_to_kv(input: &String<2048>) -> Vec<String<100>, 100> {
     // Use a static array to store the references to substrings
     const MAX_LINES: usize = 10; // Adjust this as needed
-    let mut result: [&str; MAX_LINES] = [""; MAX_LINES];
+    let mut result: Vec<String<100>, 100> = Vec::new();
     let mut count = 0;
-    let split_res = input.split('\n');
+    let split_res = input.split('&');
     for line in split_res {
         if count < MAX_LINES {
-            result[count] = line.trim();
+            // let _line: String<100> =  ;
+            result[count] = String::from(line.trim());
             count += 1;
         } else {
             break;
