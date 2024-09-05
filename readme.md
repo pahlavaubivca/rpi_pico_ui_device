@@ -2,8 +2,7 @@
 
 Example of setup UART on Raspberry Pico, write and read data from UART.
 
-
-# Setup
+# [Setup](docs/raspberry_pico.md#Preinstall)
 
 # Build
 
