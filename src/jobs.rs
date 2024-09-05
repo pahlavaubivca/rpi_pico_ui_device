@@ -7,7 +7,7 @@ use cortex_m::asm::delay;
 use cortex_m::delay::Delay;
 
 use cortex_m::prelude::_embedded_hal_serial_Write;
-use defmt::{debug, Format, Formatter, info, println};
+use defmt::{debug, error, Format, Formatter, info, println};
 use embedded_graphics::mono_font::ascii::FONT_6X12;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::prelude::Primitive;
@@ -28,7 +28,8 @@ use rp2040_hal::spi::{SpiDevice, ValidSpiPinout};
 use rp2040_hal::uart::{DataBits, ReadErrorType, StopBits, UartConfig, UartDevice, UartPeripheral, ValidUartPinout};
 use ::{rp2040_hal as hal, XTAL_FREQ_HZ};
 use lcd::lcd::ST7735;
-use messages::pi_2_pico_message::Pi2PicoTest;
+use messages::pi_2_pico_message::Pi2PicoMessage;
+use messages::pi_2_pico_test::Pi2PicoTest;
 use utils::itoa::itoa;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -92,14 +93,7 @@ pub fn core0<
     let mut pac = unsafe { pac::Peripherals::steal() };
     let core = unsafe { pac::CorePeripherals::steal() };
     let mut sio = hal::Sio::new(pac.SIO);
-    // let pins = hal::gpio::Pins::new(
-    //     pac.IO_BANK0,
-    //     pac.PADS_BANK0,
-    //     sio.gpio_bank0,
-    //     &mut pac.RESETS,
-    // );
     let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
-
 
     // Configure the clocks
     let clocks = hal::clocks::init_clocks_and_plls(
@@ -135,13 +129,8 @@ pub fn core0<
     // lines_to_send[5] = Some(("hw! core1", false));
 
     let mut ks: String<50> = String::new();
-
     let mut lines_so_send: [Option<(String<50>, bool)>; 10] = Default::default();
-    // let mut lines_so_send: [Option<(String<50>, bool)>; 10] = [None,None,None,None,None,None,None,None,None,None];
     lines_so_send[5] = Some((String::from("hw! core1"), false));
-    // lines_so_send[5] = Some((&String::from("hw! core1"), false));
-
-    // println!("lines_so_send: {:?}", lines_so_send[0]);
     loop {
         let general_timer = timer.get_counter().ticks();
         if down_button_pin.is_low().unwrap() {
@@ -174,37 +163,35 @@ pub fn core0<
                     match core::str::from_utf8(&buffer) {
                         Ok(uart_buffer_str) => {
                             text_buffer.push_str(uart_buffer_str).unwrap();
-                            // uart.flush();
-                            // println!("Buffer: {:?}", uart_buffer_str);
                             if text_buffer.contains("\r\n") {
                                 println!("Buffer contains \\r\\n");
-                                // let str_clone = text_buffer.clone();
-                                // let kv = parse_to_kv(&text_buffer);
-                                // println!("KV: {:?}", kv);
+                                text_buffer = String::from(text_buffer.trim_end_matches("\r\n"));
+
+                                match Pi2PicoMessage::try_from(&text_buffer) {
+                                    Ok(message) => {
+                                        //todo push title and paginator to last line
+                                        //todo push ip and battery to first line
+                                        //todo push data lines to lines 2-9
+                                        //todo push cursor index to line as bool
+                                    }
+                                    Err(err) => {
+                                        error!("Error reading Pi2PicoMessage: {:?}", err);
+                                    }
+                                }
+
                                 let pi_2_pico_test = Pi2PicoTest::try_from(&text_buffer);
-                                println!("Pi2PicoTest::try_from(&text_buffer)");//::try_from(text_buffer);
+                                println!("Pi2PicoTest try_from done"); //::try_from(text_buffer);
                                 match pi_2_pico_test {
                                     Ok(val) => {
-                                        println!("Pi2PicoTest: {:?}", val.kc);
+                                        println!("Pi2PicoTest: match Ok");
 
-                                        // ks.clear();
-                                        // match ks.push(val.kc as char) {
-                                        //     Ok(_) => {
-                                        //         println!("ks pushed successfully")
-                                        //     }
-                                        //     Err(_) => {
-                                        //         println!("ks push failed")
-                                        //     }
-                                        // }
-                                        // let ks_str = ks.clone();
-                                        // let ks_str = ks.clone();
 
-                                        // Store the owned String in `lines_so_send`
-                                        // lines_so_send[1] = Some((String::from(val.kc as u8), false));
+                                        lines_so_send[1] = Some((String::from(val.kc.as_str()), false));
                                     }
                                     Err(_) => {}
                                 }
                                 text_buffer.clear();
+                                uart.flush();
                             }
                         }
                         Err(err) => {
@@ -258,7 +245,7 @@ pub fn core0<
 
 
                     //todo: remove this. its only for button debug
-                    let mut message_to_screen:String<50> = String::from("kc: ");
+                    let mut message_to_screen: String<50> = String::from("kc: ");
                     message_to_screen.push(keycode.as_char()).unwrap();
                     lines_so_send[2] = Some((message_to_screen, false));
                     //
@@ -271,14 +258,10 @@ pub fn core0<
                     let message_len = message.len() as u8;
                     let message_len_string: String<4> = String::from(message_len);
                     full_message = String::new();
-                    // full_message.push_str(" ").unwrap();
                     full_message.push_str("len=").unwrap();
                     full_message.push_str(message_len_string.as_str()).unwrap();
                     full_message.push_str(message.as_str()).unwrap();
-                    full_message.push_str("\r\n\r\n").unwrap();
-                    // full_message.push('\0').unwrap();
-                    // full_message.push_str("\0").unwrap();
-                    // full_message.push(';').unwrap();
+                    full_message.push_str("\r\n").unwrap();
                     println!("Message to send: {:?}", full_message.as_str());
                     for i in 0..full_message.len() {
                         // only write char and write blocking works as expected for now
@@ -288,27 +271,12 @@ pub fn core0<
                         }).unwrap();
                         // uart.write_full_blocking(&[byte_to_send]);
                     }
-                    // uart.write_full_blocking(full_message.as_bytes());
-
-                    // uart.flush();
-                    // match uart.write_str(full_message.as_str()) {
-                    //     Ok(_) => {
-                    //         uart.flush();
-                    //     }
-                    //     Err(err) => {
-                    //         println!("Error writing to UART");
-                    //     }
-                    // }
                 }
             }
-            // info!("Loop running {:?} sec.",general_timer/1_000_000);
             timestamp = general_timer;
         }
-        // clocks.system_clock.
 
         sio.fifo.write(&lines_so_send as *const _ as u32);
-
-        // delay.delay_ms(1000u32);
     }
 }
 
@@ -325,12 +293,7 @@ where
     let mut sio = Sio::new(_sio);
     let mut first_draw = true;
     loop {
-        //  println!("core1 loop");
-        //let lines_ptr = sio.fifo.read_blocking() as *const Vec<Option<(String<50>, bool)>, 10>;
-
-        // let lines_ptr = sio.fifo.read_blocking() as *const [String<50>; 10];
         let lines_ptr = sio.fifo.read_blocking() as *const [Option<(String<50>, bool)>; 10];
-        // println!("Received: {:?}", lines_ptr);
         let lines = unsafe { &*lines_ptr };
 
         let mut index = 0;
@@ -361,15 +324,8 @@ where
                 Size::new(113, 10),
             ).into_styled(PrimitiveStyle::with_fill(Rgb565::BLACK)).draw(display).unwrap();
 
-            // _ = Text::new(
-            //     line.as_str(),
-            //     Point::new(15, offset_y),
-            //     MonoTextStyle::new(&FONT_6X12, Rgb565::RED),
-            // ).draw(display).unwrap();
             if let Some(line) = line {
                 // Clean up area for text
-
-
                 // write text
                 _ = Text::new(
                     line.0.as_str(),
@@ -380,17 +336,10 @@ where
             index += 1;
         }
         first_draw = false;
-        // delay.delay_ms(50u32);
-        // if let Some(word) = lines {
-        //     println!("Received: {}", word);
-        //     // delay.delay_ms(word);
-        //     // led_pin.toggle().unwrap();
-        //     // sio.fifo.write_blocking(CORE1_TASK_COMPLETE);
-        // };
     }
 }
 
-fn concat_strs_simple(a: &str, b: &str) -> [u8; 32] {
+fn concat_str_simple(a: &str, b: &str) -> [u8; 32] {
     let mut buffer = [0u8; 32]; // Buffer size needs to be sufficient
     let bytes_a = a.as_bytes();
     let bytes_b = b.as_bytes();
@@ -400,46 +349,3 @@ fn concat_strs_simple(a: &str, b: &str) -> [u8; 32] {
 
     buffer
 }
-
-// impl Copy for String<100>{}
-//     
-// }
-
-fn cursor_index(kv: Vec<(&str, &str), 100>) -> Option<usize> {
-    for x in kv.iter() {
-        if x.0 == "cursor" {
-            return Some(x.1.parse::<usize>().unwrap());
-        }
-    }
-    None
-}
-fn parse_to_kv(input: &String<2048>) -> Vec<String<100>, 100> {
-    // Use a static array to store the references to substrings
-    const MAX_LINES: usize = 10; // Adjust this as needed
-    let mut result: Vec<String<100>, 100> = Vec::new();
-    let mut count = 0;
-    let split_res = input.split('&');
-    for line in split_res {
-        if count < MAX_LINES {
-            // let _line: String<100> =  ;
-            result[count] = String::from(line.trim());
-            count += 1;
-        } else {
-            break;
-        }
-    }
-
-    result
-}
-
-// fn u64_to_str(num: u64) -> str {
-//     let s = unsafe {
-//         // First, we build a &[u8]...
-//         let slice = slice::from_raw_parts(&num, num.to_be_bytes().len());
-//
-//         // ... and then convert that slice into a string slice
-//         str::from_utf8(slice)
-//     }
-//         .unwrap();
-//     s
-// }
