@@ -18,8 +18,8 @@ target = "thumbv6m-none-eabi"
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
 # Pass some extra options to rustc, some of which get passed on to the linker.
 #
-runner = "probe-rs run --chip RP2040 --protocol swd"
-
+#runner = "probe-rs run --chip RP2040 --protocol swd"
+runner = "probe-rs run --chip RP2040  --protocol swd"
 # * linker argument --nmagic turns off page alignment of sections (which saves
 #   flash space)
 # * linker argument -Tlink.x tells the linker to use link.x as the linker
@@ -45,7 +45,7 @@ rustflags = [
     "-C", "link-arg=--nmagic",
     "-C", "link-arg=-Tlink.x",
     "-C", "link-arg=-Tdefmt.x",
-
+    "-C", "panic=abort",
     # Code-size optimizations.
     #   trap unreachable can save a lot of space, but requires nightly compiler.
     #   uncomment the next line if you wish to enable it
@@ -64,3 +64,4 @@ rustflags = [
 
 [env]
 DEFMT_LOG = "debug"
+#RUST_LOG="probe_rs::probe::cmsisdap=trace"
